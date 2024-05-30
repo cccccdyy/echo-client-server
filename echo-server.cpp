@@ -41,10 +41,12 @@ void* handle_client (void* arg) {
     pclient clientptr = (pclient)arg;
     while (true) {
         memset(clientptr->buffer, 0, BUF_MAX);
-        if (read(clientptr->socket, clientptr->buffer, BUF_MAX - 1) < 0) {
+        int value = read(clientptr->socket, clientptr->buffer, BUF_MAX - 1);
+        if (value < 0) {
             perror("[ERROR] read() Failed");
-            exit(EXIT_FAILURE);
+            break;
         }
+        else if (value == 0) break;
         printf("%s", clientptr->buffer);
         if (broadcast) bcast(clientptr->buffer, BUF_MAX - 1);
         else if (echo) {
@@ -63,6 +65,7 @@ void* handle_client (void* arg) {
     memset(clientptr, 0, sizeof(client));
     free(clientptr);
     pthread_mutex_unlock(&clients_mutex);
+    return NULL;
 }
 
 int main (int argc, char* argv[]) {
