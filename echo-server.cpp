@@ -15,13 +15,14 @@ bool broadcast;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct _client {
+    int num; // Nth client 
     pthread_t thread;
     int socket;
-    char buffer[BUF_MAX];
+    char buffer[BUF_MAX + 1];
 }client, *pclient; 
 
-bool flag[MAX_CLIENT] = {0};
-pclient clients[MAX_CLIENT];
+bool flag[MAX_CLIENT];
+client clients[MAX_CLIENT];
 
 void usage () {
     printf("syntax : echo-server <port> [-e[-b]]\n");
@@ -32,7 +33,7 @@ void bcast (char* buffer, size_t size) {
     pthread_mutex_lock(&clients_mutex);
     for (int i = 0; i < MAX_CLIENT; i++) {
         if (flag[i] == false) continue;
-        send(clients[i]->socket, buffer, size, 0);
+        send(clients[i].socket, buffer, size, 0);
     }
     pthread_mutex_unlock(&clients_mutex);
 }
@@ -41,14 +42,14 @@ void* handle_client (void* arg) {
     pclient clientptr = (pclient)arg;
     while (true) {
         memset(clientptr->buffer, 0, BUF_MAX);
-        int value = read(clientptr->socket, clientptr->buffer, BUF_MAX - 1);
+        int value = recv(clientptr->socket, clientptr->buffer, BUF_MAX, 0);
         if (value < 0) {
-            perror("[ERROR] read() Failed");
+            printf("[ERROR] read() Failed");
             break;
         }
         else if (value == 0) break;
         printf("%s", clientptr->buffer);
-        if (broadcast) bcast(clientptr->buffer, BUF_MAX - 1);
+        if (broadcast) bcast(clientptr->buffer, BUF_MAX);
         else if (echo) {
             pthread_mutex_lock(&clients_mutex);
             send(clientptr->socket, clientptr->buffer, BUF_MAX - 1, 0);
@@ -62,8 +63,8 @@ void* handle_client (void* arg) {
     }
     pthread_mutex_lock(&clients_mutex);
     close(clientptr->socket);
+    flag[clientptr->num] = false;
     memset(clientptr, 0, sizeof(client));
-    free(clientptr);
     pthread_mutex_unlock(&clients_mutex);
     return NULL;
 }
@@ -78,11 +79,7 @@ int main (int argc, char* argv[]) {
         echo = true;
         broadcast = false;
     }
-    else if (argc == 3 && !strcmp(argv[2], "-b")) {
-        echo = false;
-        broadcast = true;
-    }
-    else if (argc == 4 && ((!strcmp(argv[2], "-b") && !strcmp(argv[3], "-e")) || (!strcmp(argv[2], "-e") && !strcmp(argv[3], "-b")))) {
+    else if (argc == 4 && !strcmp(argv[2], "-e") && !strcmp(argv[3], "-b")) {
         echo = true;
         broadcast = true;
     }
@@ -119,6 +116,10 @@ int main (int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    // flag initialize
+    for (int i = 0; i < MAX_CLIENT; i++)
+        flag[i] = false;
+
     while (true) {
         // accept
         if ((connection_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
@@ -132,23 +133,27 @@ int main (int argc, char* argv[]) {
         int idx;
         for (idx = 0; flag[idx] == true && idx < MAX_CLIENT; idx++)
             ;
-        if (idx == 10) {
-            printf("[ERROR] MAX %d Clients Available\n", MAX_CLIENT);
+        if (idx == MAX_CLIENT) {
+            pthread_mutex_unlock(&clients_mutex);
+            char errbuf[0x100];
+            memset(errbuf, 0, sizeof(errbuf));
+            sprintf(errbuf, "[ERROR] MAX %d Clients Available\n", MAX_CLIENT);
+            send(connection_socket, errbuf, sizeof(errbuf), 0);
             close(connection_socket);
             continue;
         }
         flag[idx] = true;
-        clients[idx] = (pclient)malloc(sizeof(client));
-        memset(clients[idx], 0, sizeof(client));
-        clients[idx]->socket = connection_socket;
+        memset(&clients[idx], 0, sizeof(client));
+        clients[idx].num = idx;
+        clients[idx].socket = connection_socket;
         pthread_mutex_unlock(&clients_mutex);
-        if (pthread_create(&clients[idx]->thread, NULL, handle_client, (void *)clients[idx])) {
+        if (pthread_create(&clients[idx].thread, NULL, handle_client, (void *)&clients[idx])) {
             perror("[ERROR] pthread_create() Failed\n");
             close(server_socket);
-            close(clients[idx]->socket);
+            close(clients[idx].socket);
             exit(EXIT_FAILURE);
         }
-        pthread_detach(clients[idx]->thread);
+        pthread_detach(clients[idx].thread);
     }
 
     // socket close
